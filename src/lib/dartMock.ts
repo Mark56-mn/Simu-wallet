@@ -6,7 +6,8 @@ export interface TransactionRecord {
   senderId: string;
   receiverId: string;
   amount: number;
-  type: "test" | "live";
+  type: "send" | "receive" | "airtime" | "deposit" | "withdraw";
+  mode: "test" | "live";
   status: "pending" | "synced" | "failed";
   createdAt: number;
 }
@@ -73,7 +74,7 @@ export const dartMock = {
          throw new Error("Receiver does not exist");
       }
       
-      const balanceField = tx.type === "test" ? "balance_test" : "balance_live";
+      const balanceField = tx.mode === "test" ? "balance_test" : "balance_live";
       const senderBalance = senderDoc.data()[balanceField] || 0;
       
       if (senderBalance < tx.amount) {
@@ -90,8 +91,8 @@ export const dartMock = {
       const receiverWalletDoc = await transaction.get(receiverWalletRef);
       if (!receiverWalletDoc.exists()) {
         transaction.set(receiverWalletRef, {
-          balance_test: tx.type === "test" ? tx.amount : 1000,
-          balance_live: tx.type === "live" ? tx.amount : 0,
+          balance_test: tx.mode === "test" ? tx.amount : 1000,
+          balance_live: tx.mode === "live" ? tx.amount : 0,
           balance_dart: 0,
           createdAt: serverTimestamp()
         });

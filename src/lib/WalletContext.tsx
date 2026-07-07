@@ -5,7 +5,10 @@ import { dartMock, TransactionRecord } from "./dartMock";
 
 interface WalletContextType {
   user: { uid: string } | null;
-  balance: number;
+  balance: number; // Current mode's balance
+  balances: { test: number; live: number; dart: number };
+  mode: "test" | "live";
+  setMode: (mode: "test" | "live") => void;
   address: string;
   transactions: TransactionRecord[];
   loading: boolean;
@@ -24,7 +27,8 @@ export const useWallet = () => {
 
 export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<{ uid: string } | null>(null);
-  const [balance, setBalance] = useState(0);
+  const [balances, setBalances] = useState({ test: 0, live: 0, dart: 0 });
+  const [mode, setMode] = useState<"test" | "live">("test");
   const [address, setAddress] = useState("");
   const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -37,8 +41,10 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
+
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
+
     return () => {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
@@ -69,7 +75,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
               senderId: tx.senderId,
               receiverId: tx.receiverId,
               amount: tx.amount,
-              type: tx.type
+              type: tx.type,
+              mode: tx.mode
             });
             remaining.splice(i, 1);
           } catch (e: any) {
@@ -110,7 +117,11 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         unsubWallet = onSnapshot(q, (snapshot) => {
           if (!snapshot.empty) {
             const data = snapshot.docs[0].data();
-            setBalance(data.balance_test || 0);
+            setBalances({
+              test: data.balance_test || 0,
+              live: data.balance_live || 0,
+              dart: data.balance_dart || 0
+            });
           }
         }, (error) => {
           console.error("Wallet snapshot error:", error instanceof Error ? error.message : String(error));
@@ -161,9 +172,12 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const sendToken = async (amount: number, recipientAddress: string) => {
     if (!user) throw new Error("Not authenticated");
     
-    // Calculate effective balance considering pending txs
-    const pendingAmount = pendingQueue.reduce((sum, tx) => sum + tx.amount, 0);
-    if (balance - pendingAmount < amount) {
+    // Calculate effective balance considering pending txs for current mode
+    const modePendingTxs = pendingQueue.filter(tx => tx.mode === mode);
+    const pendingAmount = modePendingTxs.reduce((sum, tx) => sum + tx.amount, 0);
+    const currentBalance = balances[mode];
+
+    if (currentBalance - pendingAmount < amount) {
       throw new Error("Insufficient balance");
     }
 
@@ -172,7 +186,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         senderId: user.uid,
         receiverId: recipientAddress,
         amount,
-        type: "test"
+        type: "send",
+        mode: mode
       });
     } else {
       // Add to offline queue
@@ -181,7 +196,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         senderId: user.uid,
         receiverId: recipientAddress,
         amount,
-        type: "test",
+        type: "send",
+        mode: mode,
         status: "pending",
         createdAt: Date.now()
       };
@@ -206,16 +222,22 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Combine synced txs with pending txs for display
-  const displayTransactions = [...pendingQueue, ...transactions.filter(t => !pendingQueue.find(p => p.id === t.id))].sort((a, b) => b.createdAt - a.createdAt);
+  const displayTransactions = [...pendingQueue, ...transactions.filter(t => !pendingQueue.find(p => p.id === t.id))]
+    .filter(t => t.mode === mode)
+    .sort((a, b) => b.createdAt - a.createdAt);
   
   // Optimistic balance calculation
-  const pendingAmount = pendingQueue.reduce((sum, tx) => sum + tx.amount, 0);
-  const displayBalance = balance - pendingAmount;
+  const modePendingTxs = pendingQueue.filter(tx => tx.mode === mode);
+  const pendingAmount = modePendingTxs.reduce((sum, tx) => sum + tx.amount, 0);
+  const displayBalance = balances[mode] - pendingAmount;
 
   return (
     <WalletContext.Provider value={{ 
       user, 
       balance: displayBalance, 
+      balances,
+      mode,
+      setMode,
       address, 
       transactions: displayTransactions, 
       loading, 

@@ -1,11 +1,11 @@
 import { useWallet } from "../lib/WalletContext";
-import { ArrowUpRight, ArrowDownLeft, QrCode, Clock, Bell, AlertTriangle } from "lucide-react";
+import { ArrowUpRight, ArrowDownLeft, QrCode, Clock, Bell, AlertTriangle, Coins } from "lucide-react";
 import { Link } from "react-router-dom";
 import { format } from "date-fns";
 import { cn } from "../lib/utils";
 
 export default function Home() {
-  const { balance, address, transactions, loading, isOnline } = useWallet();
+  const { balance, balances, mode, setMode, address, transactions, loading, isOnline } = useWallet();
 
   if (loading) {
     return <div className="p-6 text-zinc-400 flex justify-center items-center h-full">Loading wallet...</div>;
@@ -13,10 +13,23 @@ export default function Home() {
 
   return (
     <div className="flex flex-col flex-1 p-6 space-y-6">
-      <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[10px] uppercase font-bold tracking-widest px-3 py-1.5 rounded-full flex items-center justify-center space-x-2">
-        <AlertTriangle size={12} />
-        <span>Testnet — No Real Money</span>
-      </div>
+      {mode === "test" ? (
+        <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[10px] uppercase font-bold tracking-widest px-3 py-1.5 rounded-full flex items-center justify-between space-x-2 cursor-pointer" onClick={() => setMode("live")}>
+          <div className="flex items-center space-x-2">
+            <AlertTriangle size={12} />
+            <span>Testnet — No Real Money</span>
+          </div>
+          <span className="opacity-60 hover:opacity-100 transition-opacity">Switch to Live &rarr;</span>
+        </div>
+      ) : (
+        <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[10px] uppercase font-bold tracking-widest px-3 py-1.5 rounded-full flex items-center justify-between space-x-2 cursor-pointer" onClick={() => setMode("test")}>
+          <div className="flex items-center space-x-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span>Live Mode</span>
+          </div>
+          <span className="opacity-60 hover:opacity-100 transition-opacity">&larr; Switch to Test</span>
+        </div>
+      )}
 
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-3">
@@ -31,19 +44,21 @@ export default function Home() {
             <p className="text-xs text-zinc-500 truncate w-32">{address}</p>
           </div>
         </div>
-        <button className="w-10 h-10 rounded-full bg-zinc-900 flex items-center justify-center text-zinc-400 relative">
-          <Bell size={20} />
-          <span className="absolute top-2 right-2 w-2 h-2 bg-indigo-500 rounded-full" />
-        </button>
+        <div className="flex items-center space-x-2 bg-indigo-500/10 px-3 py-1.5 rounded-full">
+          <Coins size={14} className="text-indigo-400" />
+          <span className="text-xs font-semibold text-indigo-400">{balances.dart} DART</span>
+        </div>
       </div>
 
       <div className="flex flex-col items-center justify-center py-6">
-        <h2 className="text-zinc-400 text-sm mb-2">Total Balance</h2>
+        <h2 className="text-zinc-400 text-sm mb-2">{mode === "test" ? "Test Balance" : "Live Balance"}</h2>
         <div className="flex items-baseline space-x-2">
           <span className="text-5xl font-semibold tracking-tighter">
             {balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </span>
-          <span className="text-xl text-zinc-500 font-medium">GOLD</span>
+          <span className="text-xl text-zinc-500 font-medium">
+            {mode === "test" ? "GOLD" : "NGN"}
+          </span>
         </div>
       </div>
 
@@ -77,7 +92,7 @@ export default function Home() {
         {transactions.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 text-zinc-600">
             <Clock size={32} className="mb-3 opacity-20" />
-            <p className="text-sm">No transactions yet</p>
+            <p className="text-sm">No transactions yet in {mode} mode</p>
           </div>
         ) : (
           <div className="space-y-4">
@@ -101,7 +116,7 @@ export default function Home() {
                   </div>
                   <div className="text-right">
                     <p className="text-sm font-medium text-zinc-100">
-                      {isSend ? '-' : '+'}{tx.amount.toLocaleString()} GOLD
+                      {isSend ? '-' : '+'}{tx.amount.toLocaleString()} {mode === "test" ? "GOLD" : "NGN"}
                     </p>
                     <p className="text-xs text-zinc-500">
                       {tx.status === 'pending' ? 'Pending (Offline)' : format(tx.createdAt, 'MMM d, HH:mm')}
