@@ -66,10 +66,10 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
           const tx = remaining[i];
           try {
             await dartMock.sendTransaction({
-              from: tx.from,
-              to: tx.to,
+              senderId: tx.senderId,
+              receiverId: tx.receiverId,
               amount: tx.amount,
-              tokenId: tx.tokenId
+              type: tx.type
             });
             remaining.splice(i, 1);
           } catch (e: any) {
@@ -101,24 +101,24 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
     const initData = async () => {
       try {
-        // Ensure user is registered with token
-        await dartMock.registerToken(u.uid, "GOLD_001");
+        // Ensure user is registered
+        await dartMock.registerToken(u.uid);
 
         // Listen for balance updates
-        const userRef = collection(db, "users");
-        const q = query(userRef, where("__name__", "==", u.uid));
+        const walletRef = collection(db, "wallets");
+        const q = query(walletRef, where("__name__", "==", u.uid));
         unsubWallet = onSnapshot(q, (snapshot) => {
           if (!snapshot.empty) {
             const data = snapshot.docs[0].data();
-            setBalance(data.balances?.["GOLD_001"] || 0);
+            setBalance(data.balance_test || 0);
           }
         }, (error) => {
           console.error("Wallet snapshot error:", error instanceof Error ? error.message : String(error));
         });
 
         // Listen for transactions (sent and received)
-        const sentQuery = query(collection(db, "transactions"), where("from", "==", u.uid));
-        const recvQuery = query(collection(db, "transactions"), where("to", "==", u.uid));
+        const sentQuery = query(collection(db, "transactions"), where("senderId", "==", u.uid));
+        const recvQuery = query(collection(db, "transactions"), where("receiverId", "==", u.uid));
         
         let sentTxs: TransactionRecord[] = [];
         let recvTxs: TransactionRecord[] = [];
@@ -169,19 +169,19 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
     if (isOnline) {
       await dartMock.sendTransaction({
-        from: user.uid,
-        to: recipientAddress,
+        senderId: user.uid,
+        receiverId: recipientAddress,
         amount,
-        tokenId: "GOLD_001"
+        type: "test"
       });
     } else {
       // Add to offline queue
       const newTx: TransactionRecord = {
         id: "local_" + Date.now().toString(),
-        from: user.uid,
-        to: recipientAddress,
+        senderId: user.uid,
+        receiverId: recipientAddress,
         amount,
-        tokenId: "GOLD_001",
+        type: "test",
         status: "pending",
         createdAt: Date.now()
       };

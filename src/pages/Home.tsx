@@ -82,7 +82,7 @@ export default function Home() {
         ) : (
           <div className="space-y-4">
             {transactions.slice(0, 3).map((tx) => {
-              const isSend = tx.from === address;
+              const isSend = tx.senderId === address;
               return (
                 <div key={tx.id} className="flex items-center justify-between">
                   <div className="flex items-center space-x-3">
@@ -95,7 +95,7 @@ export default function Home() {
                     <div>
                       <p className="text-sm font-medium text-zinc-100 capitalize">{isSend ? 'Sent' : 'Received'}</p>
                       <p className="text-xs text-zinc-500 truncate w-24">
-                        {isSend ? tx.to : tx.from}
+                        {isSend ? tx.receiverId : tx.senderId}
                       </p>
                     </div>
                   </div>

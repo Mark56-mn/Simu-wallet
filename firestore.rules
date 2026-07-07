@@ -2,6 +2,28 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    
+    // Users collection: Users can read/write their own profile
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Wallets collection: Users can read their own wallet, writes handled by backend/cloud functions
+    match /wallets/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      // In a real app, writes should be false (only backend functions can write)
+      // but for client-side testnet mockup, we allow the user
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Transactions collection: Users can read if they are sender or receiver
+    match /transactions/{transactionId} {
+      allow read: if request.auth != null && (resource.data.senderId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+      allow create: if request.auth != null && request.resource.data.senderId == request.auth.uid;
+      allow update, delete: if false; // Immutable ledger
+    }
+    
+    // Fallback for development (remove in live)
     match /{document=**} {
       allow read, write: if true;
     }

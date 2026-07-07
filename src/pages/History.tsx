@@ -20,7 +20,7 @@ export default function History() {
       ) : (
         <div className="space-y-6">
           {transactions.map((tx) => {
-            const isSend = tx.from === address;
+            const isSend = tx.senderId === address;
             return (
               <div key={tx.id} className="flex items-center justify-between">
                 <div className="flex items-center space-x-4">
@@ -33,7 +33,7 @@ export default function History() {
                   <div>
                     <p className="text-base font-medium text-zinc-100 capitalize">{isSend ? 'Sent' : 'Received'}</p>
                     <p className="text-xs text-zinc-500 font-mono truncate w-32">
-                      {isSend ? tx.to : tx.from}
+                      {isSend ? tx.receiverId : tx.senderId}
                     </p>
                   </div>
                 </div>
