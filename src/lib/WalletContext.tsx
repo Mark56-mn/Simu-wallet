@@ -51,8 +51,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     if (saved) {
       try {
         setPendingQueue(JSON.parse(saved));
-      } catch (e) {
-        console.error("Failed to parse queue", e);
+      } catch (e: any) {
+        console.error("Failed to parse queue", e instanceof Error ? e.message : String(e));
       }
     }
   }, []);
@@ -72,8 +72,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
               tokenId: tx.tokenId
             });
             remaining.splice(i, 1);
-          } catch (e) {
-            console.error("Failed to sync tx", tx.id, e);
+          } catch (e: any) {
+            console.error("Failed to sync tx", tx.id, e instanceof Error ? e.message : String(e));
           }
         }
         setPendingQueue(remaining);
@@ -100,42 +100,53 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     let unsubRecv = () => {};
 
     const initData = async () => {
-      // Ensure user is registered with token
-      await dartMock.registerToken(u.uid, "GOLD_001");
+      try {
+        // Ensure user is registered with token
+        await dartMock.registerToken(u.uid, "GOLD_001");
 
-      // Listen for balance updates
-      const userRef = collection(db, "users");
-      const q = query(userRef, where("__name__", "==", u.uid));
-      unsubWallet = onSnapshot(q, (snapshot) => {
-        if (!snapshot.empty) {
-          const data = snapshot.docs[0].data();
-          setBalance(data.balances?.["GOLD_001"] || 0);
-        }
-      });
+        // Listen for balance updates
+        const userRef = collection(db, "users");
+        const q = query(userRef, where("__name__", "==", u.uid));
+        unsubWallet = onSnapshot(q, (snapshot) => {
+          if (!snapshot.empty) {
+            const data = snapshot.docs[0].data();
+            setBalance(data.balances?.["GOLD_001"] || 0);
+          }
+        }, (error) => {
+          console.error("Wallet snapshot error:", error instanceof Error ? error.message : String(error));
+        });
 
-      // Listen for transactions (sent and received)
-      const sentQuery = query(collection(db, "transactions"), where("from", "==", u.uid));
-      const recvQuery = query(collection(db, "transactions"), where("to", "==", u.uid));
-      
-      let sentTxs: TransactionRecord[] = [];
-      let recvTxs: TransactionRecord[] = [];
-      
-      const updateTxs = () => {
-        const combined = [...sentTxs, ...recvTxs]
-          .sort((a, b) => b.createdAt - a.createdAt);
-        setTransactions(combined);
+        // Listen for transactions (sent and received)
+        const sentQuery = query(collection(db, "transactions"), where("from", "==", u.uid));
+        const recvQuery = query(collection(db, "transactions"), where("to", "==", u.uid));
+        
+        let sentTxs: TransactionRecord[] = [];
+        let recvTxs: TransactionRecord[] = [];
+        
+        const updateTxs = () => {
+          const combined = [...sentTxs, ...recvTxs]
+            .sort((a, b) => b.createdAt - a.createdAt);
+          setTransactions(combined);
+          setLoading(false);
+        };
+
+        unsubSent = onSnapshot(sentQuery, (snap) => {
+          sentTxs = snap.docs.map(d => ({ id: d.id, ...d.data(), createdAt: d.data().createdAt?.toMillis() || Date.now() } as TransactionRecord));
+          updateTxs();
+        }, (error) => {
+          console.error("Sent txs snapshot error:", error instanceof Error ? error.message : String(error));
+        });
+        
+        unsubRecv = onSnapshot(recvQuery, (snap) => {
+          recvTxs = snap.docs.map(d => ({ id: d.id, ...d.data(), createdAt: d.data().createdAt?.toMillis() || Date.now() } as TransactionRecord));
+          updateTxs();
+        }, (error) => {
+          console.error("Recv txs snapshot error:", error instanceof Error ? error.message : String(error));
+        });
+      } catch (err: any) {
+        console.error("Failed to init data:", err instanceof Error ? err.message : String(err));
         setLoading(false);
-      };
-
-      unsubSent = onSnapshot(sentQuery, (snap) => {
-        sentTxs = snap.docs.map(d => ({ id: d.id, ...d.data(), createdAt: d.data().createdAt?.toMillis() || Date.now() } as TransactionRecord));
-        updateTxs();
-      });
-      
-      unsubRecv = onSnapshot(recvQuery, (snap) => {
-        recvTxs = snap.docs.map(d => ({ id: d.id, ...d.data(), createdAt: d.data().createdAt?.toMillis() || Date.now() } as TransactionRecord));
-        updateTxs();
-      });
+      }
     };
 
     initData();

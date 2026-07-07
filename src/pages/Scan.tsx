@@ -27,7 +27,7 @@ export default function Scan() {
             }
           }}
           onError={(error) => {
-            console.error(error);
+            console.error(error instanceof Error ? error.message : String(error));
             setError("Could not start camera. Please check permissions.");
           }}
         />
