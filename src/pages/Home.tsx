@@ -13,7 +13,7 @@ export default function Home() {
 
   return (
     <div className="flex flex-col flex-1 p-6 space-y-6">
-      {mode === "test" ? (
+      {mode === "testnet" ? (
         <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[10px] uppercase font-bold tracking-widest px-3 py-1.5 rounded-full flex items-center justify-between space-x-2 cursor-pointer" onClick={() => setMode("live")}>
           <div className="flex items-center space-x-2">
             <AlertTriangle size={12} />
@@ -22,7 +22,7 @@ export default function Home() {
           <span className="opacity-60 hover:opacity-100 transition-opacity">Switch to Live &rarr;</span>
         </div>
       ) : (
-        <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[10px] uppercase font-bold tracking-widest px-3 py-1.5 rounded-full flex items-center justify-between space-x-2 cursor-pointer" onClick={() => setMode("test")}>
+        <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[10px] uppercase font-bold tracking-widest px-3 py-1.5 rounded-full flex items-center justify-between space-x-2 cursor-pointer" onClick={() => setMode("testnet")}>
           <div className="flex items-center space-x-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
             <span>Live Mode</span>
@@ -51,13 +51,13 @@ export default function Home() {
       </div>
 
       <div className="flex flex-col items-center justify-center py-6">
-        <h2 className="text-zinc-400 text-sm mb-2">{mode === "test" ? "Test Balance" : "Live Balance"}</h2>
+        <h2 className="text-zinc-400 text-sm mb-2">{mode === "testnet" ? "Test Balance" : "Live Balance"}</h2>
         <div className="flex items-baseline space-x-2">
           <span className="text-5xl font-semibold tracking-tighter">
             {balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </span>
           <span className="text-xl text-zinc-500 font-medium">
-            {mode === "test" ? "GOLD" : "NGN"}
+            {mode === "testnet" ? "GOLD" : "NGN"}
           </span>
         </div>
       </div>
@@ -116,7 +116,7 @@ export default function Home() {
                   </div>
                   <div className="text-right">
                     <p className="text-sm font-medium text-zinc-100">
-                      {isSend ? '-' : '+'}{tx.amount.toLocaleString()} {mode === "test" ? "GOLD" : "NGN"}
+                      {isSend ? '-' : '+'}{tx.amount.toLocaleString()} {mode === "testnet" ? "GOLD" : "NGN"}
                     </p>
                     <p className="text-xs text-zinc-500">
                       {tx.status === 'pending' ? 'Pending (Offline)' : format(tx.createdAt, 'MMM d, HH:mm')}

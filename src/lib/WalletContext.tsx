@@ -1,14 +1,14 @@
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { db } from "./firebase";
 import { collection, query, onSnapshot, where } from "firebase/firestore";
-import { dartMock, TransactionRecord } from "./dartMock";
+import { WalletService, TransactionRecord } from "./WalletService";
 
 interface WalletContextType {
   user: { uid: string } | null;
   balance: number; // Current mode's balance
-  balances: { test: number; live: number; dart: number };
-  mode: "test" | "live";
-  setMode: (mode: "test" | "live") => void;
+  balances: { testnet: number; live: number; dart: number };
+  mode: "testnet" | "live";
+  setMode: (mode: "testnet" | "live") => void;
   address: string;
   transactions: TransactionRecord[];
   loading: boolean;
@@ -27,8 +27,8 @@ export const useWallet = () => {
 
 export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<{ uid: string } | null>(null);
-  const [balances, setBalances] = useState({ test: 0, live: 0, dart: 0 });
-  const [mode, setMode] = useState<"test" | "live">("test");
+  const [balances, setBalances] = useState({ testnet: 0, live: 0, dart: 0 });
+  const [mode, setMode] = useState<"testnet" | "live">("testnet");
   const [address, setAddress] = useState("");
   const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -71,13 +71,12 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         for (let i = remaining.length - 1; i >= 0; i--) {
           const tx = remaining[i];
           try {
-            await dartMock.sendTransaction({
-              senderId: tx.senderId,
-              receiverId: tx.receiverId,
-              amount: tx.amount,
-              type: tx.type,
-              mode: tx.mode
-            });
+            await WalletService.sendMoney(
+              tx.senderId,
+              tx.receiverId,
+              tx.amount,
+              tx.mode
+            );
             remaining.splice(i, 1);
           } catch (e: any) {
             console.error("Failed to sync tx", tx.id, e instanceof Error ? e.message : String(e));
@@ -109,18 +108,18 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     const initData = async () => {
       try {
         // Ensure user is registered
-        await dartMock.registerToken(u.uid);
+        await WalletService.initializeUser(u.uid);
 
         // Listen for balance updates
-        const walletRef = collection(db, "wallets");
-        const q = query(walletRef, where("__name__", "==", u.uid));
+        const userRef = collection(db, "users");
+        const q = query(userRef, where("__name__", "==", u.uid));
         unsubWallet = onSnapshot(q, (snapshot) => {
           if (!snapshot.empty) {
             const data = snapshot.docs[0].data();
             setBalances({
-              test: data.balance_test || 0,
-              live: data.balance_live || 0,
-              dart: data.balance_dart || 0
+              testnet: data.testnetBalance || 0,
+              live: data.liveBalance || 0,
+              dart: data.dartBalance || 0
             });
           }
         }, (error) => {
@@ -182,13 +181,12 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (isOnline) {
-      await dartMock.sendTransaction({
-        senderId: user.uid,
-        receiverId: recipientAddress,
+      await WalletService.sendMoney(
+        user.uid,
+        recipientAddress,
         amount,
-        type: "send",
-        mode: mode
-      });
+        mode
+      );
     } else {
       // Add to offline queue
       const newTx: TransactionRecord = {

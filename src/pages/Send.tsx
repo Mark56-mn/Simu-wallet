@@ -98,7 +98,7 @@ export default function Send() {
           </div>
           <div className="flex justify-between mt-2 text-xs">
             <span className="text-zinc-500">Available Balance:</span>
-            <span className="font-medium text-zinc-300">{balance.toLocaleString()} {mode === "test" ? "GOLD" : "NGN"}</span>
+            <span className="font-medium text-zinc-300">{balance.toLocaleString()} {mode === "testnet" ? "GOLD" : "NGN"}</span>
           </div>
         </div>
 

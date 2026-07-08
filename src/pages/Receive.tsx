@@ -23,7 +23,7 @@ export default function Receive() {
 
       <div className="flex-1 flex flex-col items-center justify-center -mt-12">
         <p className="text-zinc-400 text-sm mb-8 text-center max-w-[240px]">
-          Scan this QR code or copy the ID below to receive {mode === "test" ? "GOLD" : "NGN"} tokens.
+          Scan this QR code or copy the ID below to receive {mode === "testnet" ? "GOLD" : "NGN"} tokens.
         </p>
 
         <div className="bg-white p-4 rounded-3xl shadow-xl shadow-indigo-500/10 mb-8">

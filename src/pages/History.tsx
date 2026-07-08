@@ -10,7 +10,7 @@ export default function History() {
 
   return (
     <div className="flex flex-col flex-1 p-6">
-      <h1 className="text-xl font-semibold mb-8">Transaction History ({mode === "test" ? "Testnet" : "Live"})</h1>
+      <h1 className="text-xl font-semibold mb-8">Transaction History ({mode === "testnet" ? "Testnet" : "Live"})</h1>
 
       {transactions.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center text-zinc-600">
@@ -39,7 +39,7 @@ export default function History() {
                 </div>
                 <div className="text-right">
                   <p className="text-base font-medium text-zinc-100">
-                    {isSend ? '-' : '+'}{tx.amount.toLocaleString()} {mode === "test" ? "GOLD" : "NGN"}
+                    {isSend ? '-' : '+'}{tx.amount.toLocaleString()} {mode === "testnet" ? "GOLD" : "NGN"}
                   </p>
                   <p className="text-xs text-zinc-500">
                     {tx.status === 'pending' ? 'Pending (Offline)' : format(tx.createdAt, 'MMM d, yyyy HH:mm')}
