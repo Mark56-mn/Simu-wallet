@@ -1,11 +1,19 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.processPendingTransactions = exports.buyAirtime = exports.requestWithdraw = exports.confirmDepositWebhook = exports.initiateDeposit = exports.sendMoney = void 0;
+exports.recoverStuckTransactions = exports.resetTestnetDailyGold = exports.processPendingTransactions = exports.buyAirtime = exports.requestWithdraw = exports.confirmDepositWebhook = exports.initiateDeposit = exports.sendMoney = void 0;
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const simsec_1 = require("./simsec");
 admin.initializeApp();
 const db = admin.firestore();
+/**
+ * Helper to get Testnet total balance
+ */
+function getTestnetBalance(testnetData) {
+    if (!testnetData)
+        return 0;
+    return (testnetData.dailyAllocation || 0) + (testnetData.earnedBalance || 0);
+}
 /**
  * Cloud Function: sendMoney
  * Authenticated users can send money to other users.
@@ -13,7 +21,6 @@ const db = admin.firestore();
 exports.sendMoney = (0, simsec_1.withSimSec)({ actionName: 'sendMoney', requireAuth: true }, async (data, context) => {
     const senderId = context.auth.uid;
     const { receiverId, amount, mode, idempotencyKey } = data;
-    // 2. Validate inputs
     if (!receiverId || typeof amount !== 'number' || amount <= 0 || !['testnet', 'live'].includes(mode) || !idempotencyKey) {
         throw new functions.https.HttpsError('invalid-argument', 'Invalid request parameters.');
     }
@@ -24,7 +31,6 @@ exports.sendMoney = (0, simsec_1.withSimSec)({ actionName: 'sendMoney', requireA
     const senderRef = db.collection('users').doc(senderId);
     const receiverRef = db.collection('users').doc(receiverId);
     return db.runTransaction(async (transaction) => {
-        // 3. Check for idempotency (duplicate prevention)
         const txDoc = await transaction.get(transactionRef);
         if (txDoc.exists) {
             throw new functions.https.HttpsError('already-exists', 'Duplicate transaction detected.');
@@ -37,25 +43,59 @@ exports.sendMoney = (0, simsec_1.withSimSec)({ actionName: 'sendMoney', requireA
         if (!receiverDoc.exists) {
             throw new functions.https.HttpsError('not-found', 'Receiver account not found.');
         }
-        const balanceField = mode === 'testnet' ? 'testnetBalance' : 'liveBalance';
         const senderData = senderDoc.data();
-        const senderBalanceBefore = senderData[balanceField] || 0;
-        // 4. Check for sufficient balance
+        const receiverData = receiverDoc.data();
+        let senderBalanceBefore = 0;
+        let receiverBalanceBefore = 0;
+        if (mode === 'testnet') {
+            senderBalanceBefore = getTestnetBalance(senderData.testnet);
+            receiverBalanceBefore = getTestnetBalance(receiverData.testnet);
+        }
+        else {
+            senderBalanceBefore = senderData.liveBalance || 0;
+            receiverBalanceBefore = receiverData.liveBalance || 0;
+        }
         if (senderBalanceBefore < amount) {
             throw new functions.https.HttpsError('failed-precondition', 'Insufficient balance.', { code: 'insufficient_balance' });
         }
-        const receiverData = receiverDoc.data();
-        const receiverBalanceBefore = receiverData[balanceField] || 0;
         const senderBalanceAfter = senderBalanceBefore - amount;
         const receiverBalanceAfter = receiverBalanceBefore + amount;
-        // 5. Update balances and create transaction record atomically
-        transaction.update(senderRef, {
-            [balanceField]: senderBalanceAfter,
-            dartBalance: admin.firestore.FieldValue.increment(1) // Reward DART token
-        });
-        transaction.update(receiverRef, {
-            [balanceField]: receiverBalanceAfter
-        });
+        let deductedDaily = 0;
+        let deductedEarned = 0;
+        if (mode === 'testnet') {
+            const testnet = senderData.testnet || { dailyAllocation: 0, earnedBalance: 0 };
+            let daily = testnet.dailyAllocation || 0;
+            let earned = testnet.earnedBalance || 0;
+            let remainingToDeduct = amount;
+            if (daily >= remainingToDeduct) {
+                daily -= remainingToDeduct;
+                deductedDaily = remainingToDeduct;
+            }
+            else {
+                deductedDaily = daily;
+                remainingToDeduct -= daily;
+                daily = 0;
+                earned -= remainingToDeduct;
+                deductedEarned = remainingToDeduct;
+            }
+            transaction.update(senderRef, {
+                'testnet.dailyAllocation': daily,
+                'testnet.earnedBalance': earned,
+                dartBalance: admin.firestore.FieldValue.increment(1)
+            });
+            transaction.update(receiverRef, {
+                'testnet.earnedBalance': admin.firestore.FieldValue.increment(amount)
+            });
+        }
+        else {
+            transaction.update(senderRef, {
+                liveBalance: senderBalanceAfter,
+                dartBalance: admin.firestore.FieldValue.increment(1)
+            });
+            transaction.update(receiverRef, {
+                liveBalance: receiverBalanceAfter
+            });
+        }
         transaction.set(transactionRef, {
             senderId,
             receiverId,
@@ -68,6 +108,8 @@ exports.sendMoney = (0, simsec_1.withSimSec)({ actionName: 'sendMoney', requireA
             senderBalanceAfter,
             receiverBalanceBefore,
             receiverBalanceAfter,
+            deductedDaily,
+            deductedEarned,
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
         return { success: true, message: 'Transfer successful' };
@@ -75,7 +117,6 @@ exports.sendMoney = (0, simsec_1.withSimSec)({ actionName: 'sendMoney', requireA
 });
 /**
  * Cloud Function: initiateDeposit
- * User requests to add real money to their live balance.
  */
 exports.initiateDeposit = (0, simsec_1.withSimSec)({ actionName: 'initiateDeposit', requireAuth: true }, async (data, context) => {
     const userId = context.auth.uid;
@@ -90,32 +131,24 @@ exports.initiateDeposit = (0, simsec_1.withSimSec)({ actionName: 'initiateDeposi
             throw new functions.https.HttpsError('already-exists', 'Duplicate deposit request detected.');
         }
         transaction.set(transactionRef, {
-            senderId: 'external_provider', // Could be flutterwave/paystack
+            senderId: 'external_provider',
             receiverId: userId,
             amount,
             type: 'deposit',
             mode: 'live',
-            status: 'initiated', // 1. TRANSACTION STATE MACHINE
+            status: 'initiated',
             idempotencyKey,
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
-        // In a real app, you would generate a payment link or reference here
         const paymentReference = `DEP_${idempotencyKey}_${Date.now()}`;
         return { success: true, paymentReference, transactionId: idempotencyKey };
     });
 });
 /**
  * Cloud Function: confirmDepositWebhook
- * Secure HTTP webhook called by payment provider (e.g. Flutterwave)
- * Replaces the insecure confirmDeposit onCall function.
  */
 exports.confirmDepositWebhook = functions.https.onRequest(async (req, res) => {
     try {
-        // 1. Verify Provider Signature
-        // const signature = req.headers['x-provider-signature'];
-        // In production, verify HMAC signature here using provider's secret key
-        // const expectedSignature = crypto.createHmac('sha256', process.env.WEBHOOK_SECRET).update(req.rawBody).digest('hex');
-        // if (signature !== expectedSignature) return res.status(401).send('Unauthorized');
         const { transactionId, amount: paidAmount, status } = req.body;
         if (!transactionId || status !== 'successful') {
             res.status(400).send('Invalid payload or unsuccessful payment');
@@ -129,8 +162,7 @@ exports.confirmDepositWebhook = functions.https.onRequest(async (req, res) => {
                 throw new Error('Transaction not found');
             const txData = txDoc.data();
             if (txData.status === 'completed')
-                return; // Idempotent
-            // 2. Validate Amount
+                return;
             if (txData.amount !== paidAmount) {
                 throw new Error(`Amount mismatch. Expected ${txData.amount}, got ${paidAmount}`);
             }
@@ -138,7 +170,6 @@ exports.confirmDepositWebhook = functions.https.onRequest(async (req, res) => {
             const receiverDoc = await transaction.get(receiverRef);
             const balanceBefore = ((_a = receiverDoc.data()) === null || _a === void 0 ? void 0 : _a.liveBalance) || 0;
             const balanceAfter = balanceBefore + paidAmount;
-            // 3. Update Balance & Store Snapshot
             transaction.update(receiverRef, { liveBalance: balanceAfter });
             transaction.update(transactionRef, {
                 status: 'completed',
@@ -156,7 +187,6 @@ exports.confirmDepositWebhook = functions.https.onRequest(async (req, res) => {
 });
 /**
  * Cloud Function: requestWithdraw
- * User requests to withdraw their live balance to real money.
  */
 exports.requestWithdraw = (0, simsec_1.withSimSec)({ actionName: 'requestWithdraw', requireAuth: true }, async (data, context) => {
     const userId = context.auth.uid;
@@ -181,9 +211,7 @@ exports.requestWithdraw = (0, simsec_1.withSimSec)({ actionName: 'requestWithdra
             throw new functions.https.HttpsError('failed-precondition', 'Insufficient live balance.', { code: 'insufficient_balance' });
         }
         const balanceAfter = balanceBefore - amount;
-        // Deduct balance immediately
         transaction.update(userRef, { liveBalance: balanceAfter });
-        // Create pending withdrawal transaction
         transaction.set(transactionRef, {
             senderId: userId,
             receiverId: 'external_provider',
@@ -196,13 +224,11 @@ exports.requestWithdraw = (0, simsec_1.withSimSec)({ actionName: 'requestWithdra
             balanceAfter,
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
-        // Enqueued for background processor
         return { success: true, message: 'Withdrawal requested successfully.', transactionId: idempotencyKey };
     });
 });
 /**
  * Cloud Function: buyAirtime
- * User purchases airtime/data using their wallet balance.
  */
 exports.buyAirtime = (0, simsec_1.withSimSec)({ actionName: 'buyAirtime', requireAuth: true }, async (data, context) => {
     const userId = context.auth.uid;
@@ -212,9 +238,7 @@ exports.buyAirtime = (0, simsec_1.withSimSec)({ actionName: 'buyAirtime', requir
     }
     const transactionRef = db.collection('transactions').doc(idempotencyKey);
     const userRef = db.collection('users').doc(userId);
-    // 1. Deduct balance and create pending transaction
     await db.runTransaction(async (transaction) => {
-        var _a;
         const txDoc = await transaction.get(transactionRef);
         if (txDoc.exists) {
             throw new functions.https.HttpsError('already-exists', 'Duplicate airtime request.');
@@ -223,21 +247,51 @@ exports.buyAirtime = (0, simsec_1.withSimSec)({ actionName: 'buyAirtime', requir
         if (!userDoc.exists) {
             throw new functions.https.HttpsError('not-found', 'User account not found.');
         }
-        const balanceField = mode === 'testnet' ? 'testnetBalance' : 'liveBalance';
-        const balanceBefore = ((_a = userDoc.data()) === null || _a === void 0 ? void 0 : _a[balanceField]) || 0;
+        const userData = userDoc.data();
+        let balanceBefore = 0;
+        if (mode === 'testnet') {
+            balanceBefore = getTestnetBalance(userData.testnet);
+        }
+        else {
+            balanceBefore = userData.liveBalance || 0;
+        }
         if (balanceBefore < amount) {
             throw new functions.https.HttpsError('failed-precondition', 'Insufficient balance.', { code: 'insufficient_balance' });
         }
         const balanceAfter = balanceBefore - amount;
-        // Deduct balance
-        transaction.update(userRef, {
-            [balanceField]: balanceAfter,
-            dartBalance: admin.firestore.FieldValue.increment(1) // Reward DART token for airtime purchase
-        });
-        // Create pending airtime transaction
+        let deductedDaily = 0;
+        let deductedEarned = 0;
+        if (mode === 'testnet') {
+            const testnet = userData.testnet || { dailyAllocation: 0, earnedBalance: 0 };
+            let daily = testnet.dailyAllocation || 0;
+            let earned = testnet.earnedBalance || 0;
+            let remainingToDeduct = amount;
+            if (daily >= remainingToDeduct) {
+                daily -= remainingToDeduct;
+                deductedDaily = remainingToDeduct;
+            }
+            else {
+                deductedDaily = daily;
+                remainingToDeduct -= daily;
+                daily = 0;
+                earned -= remainingToDeduct;
+                deductedEarned = remainingToDeduct;
+            }
+            transaction.update(userRef, {
+                'testnet.dailyAllocation': daily,
+                'testnet.earnedBalance': earned,
+                dartBalance: admin.firestore.FieldValue.increment(1)
+            });
+        }
+        else {
+            transaction.update(userRef, {
+                liveBalance: balanceAfter,
+                dartBalance: admin.firestore.FieldValue.increment(1)
+            });
+        }
         transaction.set(transactionRef, {
             senderId: userId,
-            receiverId: 'external_provider', // Airtime provider
+            receiverId: 'external_provider',
             amount,
             type: 'airtime',
             mode,
@@ -247,6 +301,8 @@ exports.buyAirtime = (0, simsec_1.withSimSec)({ actionName: 'buyAirtime', requir
             idempotencyKey,
             balanceBefore,
             balanceAfter,
+            deductedDaily,
+            deductedEarned,
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
     });
@@ -254,7 +310,6 @@ exports.buyAirtime = (0, simsec_1.withSimSec)({ actionName: 'buyAirtime', requir
 });
 /**
  * Cloud Function: processPendingTransactions (Background Processor)
- * Handles long-running external API calls and handles automatic refunds on failure.
  */
 exports.processPendingTransactions = functions.firestore
     .document('transactions/{transactionId}')
@@ -263,13 +318,11 @@ exports.processPendingTransactions = functions.firestore
     if (tx.status !== 'pending' || !['airtime', 'withdraw'].includes(tx.type))
         return;
     const txRef = snap.ref;
-    // Transition to processing
     await txRef.update({ status: 'processing' });
     try {
-        // 2. Simulate external API call (e.g., Reloadly, Flutterwave)
         let isSuccessful = true;
         if (Math.random() < 0.1)
-            isSuccessful = false; // Simulate occasional failure for testing
+            isSuccessful = false;
         if (isSuccessful) {
             await txRef.update({
                 status: 'completed',
@@ -281,20 +334,29 @@ exports.processPendingTransactions = functions.firestore
         }
     }
     catch (error) {
-        // 3. REFUND LOGIC
         await db.runTransaction(async (transaction) => {
-            var _a, _b;
+            var _a;
             const currentTx = await transaction.get(txRef);
             if (((_a = currentTx.data()) === null || _a === void 0 ? void 0 : _a.status) === 'refunded')
-                return; // Prevent double refund
+                return;
             const userRef = db.collection('users').doc(tx.senderId);
             const userDoc = await transaction.get(userRef);
-            const balanceField = tx.mode === 'testnet' ? 'testnetBalance' : 'liveBalance';
-            const balanceBefore = ((_b = userDoc.data()) === null || _b === void 0 ? void 0 : _b[balanceField]) || 0;
-            const balanceAfter = balanceBefore + tx.amount;
-            // Restore balance
-            transaction.update(userRef, { [balanceField]: balanceAfter });
-            // Mark as refunded
+            const userData = userDoc.data();
+            let balanceBefore = 0;
+            let balanceAfter = 0;
+            if (tx.mode === 'testnet') {
+                balanceBefore = getTestnetBalance(userData.testnet);
+                balanceAfter = balanceBefore + tx.amount;
+                transaction.update(userRef, {
+                    'testnet.dailyAllocation': admin.firestore.FieldValue.increment(tx.deductedDaily || 0),
+                    'testnet.earnedBalance': admin.firestore.FieldValue.increment(tx.deductedEarned || 0)
+                });
+            }
+            else {
+                balanceBefore = userData.liveBalance || 0;
+                balanceAfter = balanceBefore + tx.amount;
+                transaction.update(userRef, { liveBalance: balanceAfter });
+            }
             transaction.update(txRef, {
                 status: 'refunded',
                 error: error.message,
@@ -304,6 +366,78 @@ exports.processPendingTransactions = functions.firestore
             });
         });
         console.error(`Transaction ${context.params.transactionId} failed and was refunded.`, error);
+    }
+});
+/**
+ * Scheduled Job: Reset Testnet Daily Gold (Runs every 24 hours)
+ */
+exports.resetTestnetDailyGold = functions.pubsub.schedule('every 24 hours').onRun(async (context) => {
+    const usersSnapshot = await db.collection('users').get();
+    const batches = [];
+    let currentBatch = db.batch();
+    let count = 0;
+    usersSnapshot.forEach(doc => {
+        currentBatch.update(doc.ref, {
+            'testnet.dailyAllocation': 10000,
+            'testnet.lastResetAt': admin.firestore.FieldValue.serverTimestamp()
+        });
+        count++;
+        if (count === 500) {
+            batches.push(currentBatch.commit());
+            currentBatch = db.batch();
+            count = 0;
+        }
+    });
+    if (count > 0) {
+        batches.push(currentBatch.commit());
+    }
+    await Promise.all(batches);
+    console.log('Daily Testnet Gold Reset Completed');
+});
+/**
+ * Scheduled Job: Recover Stuck Transactions (Runs every hour)
+ */
+exports.recoverStuckTransactions = functions.pubsub.schedule('every 1 hours').onRun(async (context) => {
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const stuckTxSnapshot = await db.collection('transactions')
+        .where('status', 'in', ['pending', 'processing'])
+        .where('createdAt', '<', oneHourAgo)
+        .get();
+    for (const doc of stuckTxSnapshot.docs) {
+        const tx = doc.data();
+        // Trigger refund logic manually
+        await db.runTransaction(async (transaction) => {
+            var _a, _b;
+            const currentTx = await transaction.get(doc.ref);
+            if (((_a = currentTx.data()) === null || _a === void 0 ? void 0 : _a.status) === 'refunded' || ((_b = currentTx.data()) === null || _b === void 0 ? void 0 : _b.status) === 'completed')
+                return;
+            const userRef = db.collection('users').doc(tx.senderId);
+            const userDoc = await transaction.get(userRef);
+            const userData = userDoc.data();
+            let balanceBefore = 0;
+            let balanceAfter = 0;
+            if (tx.mode === 'testnet') {
+                balanceBefore = getTestnetBalance(userData.testnet);
+                balanceAfter = balanceBefore + tx.amount;
+                transaction.update(userRef, {
+                    'testnet.dailyAllocation': admin.firestore.FieldValue.increment(tx.deductedDaily || 0),
+                    'testnet.earnedBalance': admin.firestore.FieldValue.increment(tx.deductedEarned || 0)
+                });
+            }
+            else {
+                balanceBefore = userData.liveBalance || 0;
+                balanceAfter = balanceBefore + tx.amount;
+                transaction.update(userRef, { liveBalance: balanceAfter });
+            }
+            transaction.update(doc.ref, {
+                status: 'refunded',
+                error: 'Stuck transaction auto-recovered and refunded.',
+                refundBalanceBefore: balanceBefore,
+                refundBalanceAfter: balanceAfter,
+                refundedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+        });
+        console.log(`Recovered and refunded stuck transaction: ${doc.id}`);
     }
 });
 //# sourceMappingURL=index.js.map

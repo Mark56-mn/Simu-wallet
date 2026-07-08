@@ -9,6 +9,8 @@ export interface TransactionRecord {
   type: "send" | "receive" | "airtime" | "deposit" | "withdraw";
   mode: "testnet" | "live";
   status: "pending" | "completed" | "failed";
+  deductedDaily?: number;
+  deductedEarned?: number;
   createdAt: number;
 }
 
@@ -23,7 +25,11 @@ export class WalletService {
     if (!userDoc.exists()) {
       await setDoc(userRef, {
         email: email || `user_${userId.substring(0, 5)}@example.com`,
-        testnetBalance: 1000,
+        testnet: {
+          dailyAllocation: 10000,
+          earnedBalance: 0,
+          lastResetAt: serverTimestamp()
+        },
         liveBalance: 0,
         dartBalance: 0,
         createdAt: serverTimestamp()
@@ -40,7 +46,12 @@ export class WalletService {
     
     if (userDoc.exists()) {
       const data = userDoc.data();
-      return mode === "testnet" ? (data.testnetBalance || 0) : (data.liveBalance || 0);
+      if (mode === "testnet") {
+        const testnet = data.testnet || { dailyAllocation: 0, earnedBalance: 0 };
+        return (testnet.dailyAllocation || 0) + (testnet.earnedBalance || 0);
+      } else {
+        return data.liveBalance || 0;
+      }
     }
     return 0;
   }
@@ -54,8 +65,15 @@ export class WalletService {
     
     if (userDoc.exists()) {
       const data = userDoc.data();
+      let testnetBalance = 0;
+      if (data.testnet) {
+        testnetBalance = (data.testnet.dailyAllocation || 0) + (data.testnet.earnedBalance || 0);
+      } else {
+        // Fallback for old schema
+        testnetBalance = data.testnetBalance || 0;
+      }
       return {
-        testnet: data.testnetBalance || 0,
+        testnet: testnetBalance,
         live: data.liveBalance || 0,
         dart: data.dartBalance || 0
       };
@@ -104,23 +122,59 @@ export class WalletService {
          throw new Error("Receiver does not exist");
       }
       
-      const balanceField = mode === "testnet" ? "testnetBalance" : "liveBalance";
-      const senderBalance = senderDoc.data()[balanceField] || 0;
+      const senderData = senderDoc.data();
+      let senderBalance = 0;
+      
+      if (mode === "testnet") {
+        const testnet = senderData.testnet || { dailyAllocation: 0, earnedBalance: 0 };
+        senderBalance = (testnet.dailyAllocation || 0) + (testnet.earnedBalance || 0);
+      } else {
+        senderBalance = senderData.liveBalance || 0;
+      }
       
       if (senderBalance < amount) {
         throw new Error("Insufficient balance");
       }
       
-      // Deduct from sender and add DART reward (1 DART per transaction)
-      transaction.update(senderRef, {
-        [balanceField]: increment(-amount),
-        dartBalance: increment(1)
-      });
+      let deductedDaily = 0;
+      let deductedEarned = 0;
       
-      // Add to receiver
-      transaction.update(receiverRef, {
-        [balanceField]: increment(amount)
-      });
+      if (mode === "testnet") {
+        const testnet = senderData.testnet || { dailyAllocation: 0, earnedBalance: 0 };
+        let daily = testnet.dailyAllocation || 0;
+        let earned = testnet.earnedBalance || 0;
+        let remaining = amount;
+        
+        if (daily >= remaining) {
+          daily -= remaining;
+          deductedDaily = remaining;
+        } else {
+          deductedDaily = daily;
+          remaining -= daily;
+          daily = 0;
+          earned -= remaining;
+          deductedEarned = remaining;
+        }
+        
+        transaction.update(senderRef, {
+          "testnet.dailyAllocation": daily,
+          "testnet.earnedBalance": earned,
+          dartBalance: increment(1)
+        });
+        
+        transaction.update(receiverRef, {
+          "testnet.earnedBalance": increment(amount)
+        });
+      } else {
+        transaction.update(senderRef, {
+          liveBalance: increment(-amount),
+          dartBalance: increment(1)
+        });
+        
+        transaction.update(receiverRef, {
+          liveBalance: increment(amount)
+        });
+      }
       
       // Record transaction
       const txRef = doc(collection(db, "transactions"));
@@ -132,6 +186,8 @@ export class WalletService {
         type: "send",
         mode,
         status: "completed",
+        deductedDaily,
+        deductedEarned,
         createdAt: Date.now()
       };
       
@@ -142,6 +198,8 @@ export class WalletService {
         type: "send",
         mode,
         status: "completed",
+        deductedDaily,
+        deductedEarned,
         createdAt: serverTimestamp()
       });
       

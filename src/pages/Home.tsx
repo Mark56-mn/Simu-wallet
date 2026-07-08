@@ -3,6 +3,7 @@ import { ArrowUpRight, ArrowDownLeft, QrCode, Clock, Bell, AlertTriangle, Coins 
 import { Link } from "react-router-dom";
 import { format } from "date-fns";
 import { cn } from "../lib/utils";
+import { ActivityChart } from "../components/ActivityChart";
 
 export default function Home() {
   const { balance, balances, mode, setMode, address, transactions, loading, isOnline } = useWallet();
@@ -12,9 +13,9 @@ export default function Home() {
   }
 
   return (
-    <div className="flex flex-col flex-1 p-6 space-y-6">
+    <div className="flex flex-col flex-1 p-6 space-y-6 overflow-y-auto">
       {mode === "testnet" ? (
-        <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[10px] uppercase font-bold tracking-widest px-3 py-1.5 rounded-full flex items-center justify-between space-x-2 cursor-pointer" onClick={() => setMode("live")}>
+        <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[10px] uppercase font-bold tracking-widest px-3 py-1.5 rounded-full flex items-center justify-between space-x-2 cursor-pointer shrink-0" onClick={() => setMode("live")}>
           <div className="flex items-center space-x-2">
             <AlertTriangle size={12} />
             <span>Testnet — No Real Money</span>
@@ -22,7 +23,7 @@ export default function Home() {
           <span className="opacity-60 hover:opacity-100 transition-opacity">Switch to Live &rarr;</span>
         </div>
       ) : (
-        <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[10px] uppercase font-bold tracking-widest px-3 py-1.5 rounded-full flex items-center justify-between space-x-2 cursor-pointer" onClick={() => setMode("testnet")}>
+        <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[10px] uppercase font-bold tracking-widest px-3 py-1.5 rounded-full flex items-center justify-between space-x-2 cursor-pointer shrink-0" onClick={() => setMode("testnet")}>
           <div className="flex items-center space-x-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
             <span>Live Mode</span>
@@ -31,7 +32,7 @@ export default function Home() {
         </div>
       )}
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between shrink-0">
         <div className="flex items-center space-x-3">
           <div className="w-10 h-10 bg-indigo-500 rounded-full flex items-center justify-center font-bold text-lg">
             S
@@ -83,8 +84,10 @@ export default function Home() {
         </Link>
       </div>
 
-      <div className="flex-1 pt-6 border-t border-zinc-900">
-        <div className="flex items-center justify-between mb-4">
+      <div className="flex-1 pt-6 border-t border-zinc-900 shrink-0">
+        <ActivityChart transactions={transactions} address={address} />
+        
+        <div className="flex items-center justify-between mb-4 mt-6">
           <h3 className="text-sm font-medium text-zinc-100">Recent Transactions</h3>
           <Link to="/history" className="text-xs text-indigo-400 font-medium">View All</Link>
         </div>
