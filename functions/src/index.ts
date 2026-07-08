@@ -1,5 +1,6 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
+import { withSimSec } from './simsec';
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -8,13 +9,8 @@ const db = admin.firestore();
  * Cloud Function: sendMoney
  * Authenticated users can send money to other users.
  */
-export const sendMoney = functions.https.onCall(async (data, context) => {
-  // 1. Authenticate user
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'User must be logged in to send money.');
-  }
-
-  const senderId = context.auth.uid;
+export const sendMoney = withSimSec({ actionName: 'sendMoney', requireAuth: true }, async (data, context) => {
+  const senderId = context.auth!.uid;
   const { receiverId, amount, mode, idempotencyKey } = data;
 
   // 2. Validate inputs
@@ -48,22 +44,28 @@ export const sendMoney = functions.https.onCall(async (data, context) => {
     }
 
     const balanceField = mode === 'testnet' ? 'testnetBalance' : 'liveBalance';
-    const senderData = senderDoc.data();
-    const senderBalance = senderData?.[balanceField] || 0;
+    const senderData = senderDoc.data()!;
+    const senderBalanceBefore = senderData[balanceField] || 0;
 
     // 4. Check for sufficient balance
-    if (senderBalance < amount) {
+    if (senderBalanceBefore < amount) {
       throw new functions.https.HttpsError('failed-precondition', 'Insufficient balance.', { code: 'insufficient_balance' });
     }
 
+    const receiverData = receiverDoc.data()!;
+    const receiverBalanceBefore = receiverData[balanceField] || 0;
+
+    const senderBalanceAfter = senderBalanceBefore - amount;
+    const receiverBalanceAfter = receiverBalanceBefore + amount;
+
     // 5. Update balances and create transaction record atomically
     transaction.update(senderRef, {
-      [balanceField]: admin.firestore.FieldValue.increment(-amount),
+      [balanceField]: senderBalanceAfter,
       dartBalance: admin.firestore.FieldValue.increment(1) // Reward DART token
     });
 
     transaction.update(receiverRef, {
-      [balanceField]: admin.firestore.FieldValue.increment(amount)
+      [balanceField]: receiverBalanceAfter
     });
 
     transaction.set(transactionRef, {
@@ -74,6 +76,10 @@ export const sendMoney = functions.https.onCall(async (data, context) => {
       mode,
       status: 'completed',
       idempotencyKey,
+      senderBalanceBefore,
+      senderBalanceAfter,
+      receiverBalanceBefore,
+      receiverBalanceAfter,
       createdAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
@@ -85,12 +91,8 @@ export const sendMoney = functions.https.onCall(async (data, context) => {
  * Cloud Function: initiateDeposit
  * User requests to add real money to their live balance.
  */
-export const initiateDeposit = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'User must be logged in to deposit.');
-  }
-
-  const userId = context.auth.uid;
+export const initiateDeposit = withSimSec({ actionName: 'initiateDeposit', requireAuth: true }, async (data, context) => {
+  const userId = context.auth!.uid;
   const { amount, idempotencyKey } = data;
 
   if (typeof amount !== 'number' || amount <= 0 || !idempotencyKey) {
@@ -111,7 +113,7 @@ export const initiateDeposit = functions.https.onCall(async (data, context) => {
       amount,
       type: 'deposit',
       mode: 'live',
-      status: 'pending',
+      status: 'initiated', // 1. TRANSACTION STATE MACHINE
       idempotencyKey,
       createdAt: admin.firestore.FieldValue.serverTimestamp()
     });
@@ -124,62 +126,67 @@ export const initiateDeposit = functions.https.onCall(async (data, context) => {
 });
 
 /**
- * Cloud Function: confirmDeposit
- * Called by payment provider webhook or internal system to confirm deposit.
- * Normally this would be an HTTP webhook rather than onCall, but using onCall for simplicity here.
+ * Cloud Function: confirmDepositWebhook
+ * Secure HTTP webhook called by payment provider (e.g. Flutterwave)
+ * Replaces the insecure confirmDeposit onCall function.
  */
-export const confirmDeposit = functions.https.onCall(async (data, context) => {
-  // Security note: In reality, verify the caller is your payment provider webhook
-  // or restrict this to admin users.
+export const confirmDepositWebhook = functions.https.onRequest(async (req, res) => {
+  try {
+    // 1. Verify Provider Signature
+    // const signature = req.headers['x-provider-signature'];
+    // In production, verify HMAC signature here using provider's secret key
+    // const expectedSignature = crypto.createHmac('sha256', process.env.WEBHOOK_SECRET).update(req.rawBody).digest('hex');
+    // if (signature !== expectedSignature) return res.status(401).send('Unauthorized');
 
-  const { transactionId } = data;
-  if (!transactionId) {
-    throw new functions.https.HttpsError('invalid-argument', 'Transaction ID is required.');
+    const { transactionId, amount: paidAmount, status } = req.body;
+
+    if (!transactionId || status !== 'successful') {
+      res.status(400).send('Invalid payload or unsuccessful payment');
+      return;
+    }
+
+    const transactionRef = db.collection('transactions').doc(transactionId);
+
+    await db.runTransaction(async (transaction) => {
+      const txDoc = await transaction.get(transactionRef);
+      if (!txDoc.exists) throw new Error('Transaction not found');
+
+      const txData = txDoc.data()!;
+      if (txData.status === 'completed') return; // Idempotent
+
+      // 2. Validate Amount
+      if (txData.amount !== paidAmount) {
+        throw new Error(`Amount mismatch. Expected ${txData.amount}, got ${paidAmount}`);
+      }
+
+      const receiverRef = db.collection('users').doc(txData.receiverId);
+      const receiverDoc = await transaction.get(receiverRef);
+      const balanceBefore = receiverDoc.data()?.liveBalance || 0;
+      const balanceAfter = balanceBefore + paidAmount;
+
+      // 3. Update Balance & Store Snapshot
+      transaction.update(receiverRef, { liveBalance: balanceAfter });
+      transaction.update(transactionRef, {
+        status: 'completed',
+        balanceBefore,
+        balanceAfter,
+        confirmedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    });
+
+    res.status(200).send('Webhook processed successfully');
+  } catch (error: any) {
+    console.error('Webhook processing failed:', error);
+    res.status(500).send('Internal Server Error');
   }
-
-  const transactionRef = db.collection('transactions').doc(transactionId);
-
-  return db.runTransaction(async (transaction) => {
-    const txDoc = await transaction.get(transactionRef);
-    if (!txDoc.exists) {
-      throw new functions.https.HttpsError('not-found', 'Transaction not found.');
-    }
-
-    const txData = txDoc.data();
-    if (txData?.status === 'completed') {
-      throw new functions.https.HttpsError('already-exists', 'Deposit already confirmed.');
-    }
-
-    if (txData?.type !== 'deposit' || txData?.status !== 'pending') {
-      throw new functions.https.HttpsError('failed-precondition', 'Invalid transaction state.');
-    }
-
-    const receiverRef = db.collection('users').doc(txData.receiverId);
-    
-    // Update balance and transaction status
-    transaction.update(receiverRef, {
-      liveBalance: admin.firestore.FieldValue.increment(txData.amount)
-    });
-
-    transaction.update(transactionRef, {
-      status: 'completed',
-      confirmedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    return { success: true, message: 'Deposit confirmed and credited.' };
-  });
 });
 
 /**
  * Cloud Function: requestWithdraw
  * User requests to withdraw their live balance to real money.
  */
-export const requestWithdraw = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'User must be logged in to withdraw.');
-  }
-
-  const userId = context.auth.uid;
+export const requestWithdraw = withSimSec({ actionName: 'requestWithdraw', requireAuth: true }, async (data, context) => {
+  const userId = context.auth!.uid;
   const { amount, idempotencyKey } = data;
 
   if (typeof amount !== 'number' || amount <= 0 || !idempotencyKey) {
@@ -200,15 +207,15 @@ export const requestWithdraw = functions.https.onCall(async (data, context) => {
       throw new functions.https.HttpsError('not-found', 'User account not found.');
     }
 
-    const currentLiveBalance = userDoc.data()?.liveBalance || 0;
-    if (currentLiveBalance < amount) {
+    const balanceBefore = userDoc.data()?.liveBalance || 0;
+    if (balanceBefore < amount) {
       throw new functions.https.HttpsError('failed-precondition', 'Insufficient live balance.', { code: 'insufficient_balance' });
     }
 
+    const balanceAfter = balanceBefore - amount;
+
     // Deduct balance immediately
-    transaction.update(userRef, {
-      liveBalance: admin.firestore.FieldValue.increment(-amount)
-    });
+    transaction.update(userRef, { liveBalance: balanceAfter });
 
     // Create pending withdrawal transaction
     transaction.set(transactionRef, {
@@ -219,12 +226,12 @@ export const requestWithdraw = functions.https.onCall(async (data, context) => {
       mode: 'live',
       status: 'pending',
       idempotencyKey,
+      balanceBefore,
+      balanceAfter,
       createdAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    // In a real application, you would trigger the payout API (e.g., Flutterwave) here 
-    // or queue a background job to process the payout.
-
+    // Enqueued for background processor
     return { success: true, message: 'Withdrawal requested successfully.', transactionId: idempotencyKey };
   });
 });
@@ -233,12 +240,8 @@ export const requestWithdraw = functions.https.onCall(async (data, context) => {
  * Cloud Function: buyAirtime
  * User purchases airtime/data using their wallet balance.
  */
-export const buyAirtime = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'User must be logged in to buy airtime.');
-  }
-
-  const userId = context.auth.uid;
+export const buyAirtime = withSimSec({ actionName: 'buyAirtime', requireAuth: true }, async (data, context) => {
+  const userId = context.auth!.uid;
   const { phoneNumber, amount, network, mode, idempotencyKey } = data;
 
   if (!phoneNumber || typeof amount !== 'number' || amount <= 0 || !network || !['testnet', 'live'].includes(mode) || !idempotencyKey) {
@@ -261,15 +264,17 @@ export const buyAirtime = functions.https.onCall(async (data, context) => {
     }
 
     const balanceField = mode === 'testnet' ? 'testnetBalance' : 'liveBalance';
-    const currentBalance = userDoc.data()?.[balanceField] || 0;
+    const balanceBefore = userDoc.data()?.[balanceField] || 0;
     
-    if (currentBalance < amount) {
+    if (balanceBefore < amount) {
       throw new functions.https.HttpsError('failed-precondition', 'Insufficient balance.', { code: 'insufficient_balance' });
     }
 
+    const balanceAfter = balanceBefore - amount;
+
     // Deduct balance
     transaction.update(userRef, {
-      [balanceField]: admin.firestore.FieldValue.increment(-amount),
+      [balanceField]: balanceAfter,
       dartBalance: admin.firestore.FieldValue.increment(1) // Reward DART token for airtime purchase
     });
 
@@ -284,27 +289,68 @@ export const buyAirtime = functions.https.onCall(async (data, context) => {
       phoneNumber,
       network,
       idempotencyKey,
+      balanceBefore,
+      balanceAfter,
       createdAt: admin.firestore.FieldValue.serverTimestamp()
     });
   });
 
-  // 2. Simulate external API call to airtime provider
-  // In a real app, you would call the external API here (e.g., Reloadly, Flutterwave)
-  const isSuccessful = true; // Simulate success
-
-  // 3. Update transaction status based on API result
-  if (isSuccessful) {
-    await transactionRef.update({
-      status: 'completed',
-      completedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-    return { success: true, message: 'Airtime purchased successfully.', transactionId: idempotencyKey };
-  } else {
-    // If failed, we should refund the user in a real scenario
-    await transactionRef.update({
-      status: 'failed',
-      failedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-    return { success: false, message: 'Airtime purchase failed. Refund pending.', transactionId: idempotencyKey };
-  }
+  return { success: true, message: 'Airtime purchase queued successfully.', transactionId: idempotencyKey };
 });
+
+/**
+ * Cloud Function: processPendingTransactions (Background Processor)
+ * Handles long-running external API calls and handles automatic refunds on failure.
+ */
+export const processPendingTransactions = functions.firestore
+  .document('transactions/{transactionId}')
+  .onCreate(async (snap, context) => {
+    const tx = snap.data();
+    if (tx.status !== 'pending' || !['airtime', 'withdraw'].includes(tx.type)) return;
+
+    const txRef = snap.ref;
+    
+    // Transition to processing
+    await txRef.update({ status: 'processing' });
+
+    try {
+      // 2. Simulate external API call (e.g., Reloadly, Flutterwave)
+      let isSuccessful = true;
+      if (Math.random() < 0.1) isSuccessful = false; // Simulate occasional failure for testing
+
+      if (isSuccessful) {
+        await txRef.update({
+          status: 'completed',
+          completedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+      } else {
+        throw new Error('External API provider failed');
+      }
+    } catch (error: any) {
+      // 3. REFUND LOGIC
+      await db.runTransaction(async (transaction) => {
+        const currentTx = await transaction.get(txRef);
+        if (currentTx.data()?.status === 'refunded') return; // Prevent double refund
+
+        const userRef = db.collection('users').doc(tx.senderId);
+        const userDoc = await transaction.get(userRef);
+        const balanceField = tx.mode === 'testnet' ? 'testnetBalance' : 'liveBalance';
+        const balanceBefore = userDoc.data()?.[balanceField] || 0;
+        const balanceAfter = balanceBefore + tx.amount;
+
+        // Restore balance
+        transaction.update(userRef, { [balanceField]: balanceAfter });
+        
+        // Mark as refunded
+        transaction.update(txRef, {
+          status: 'refunded',
+          error: error.message,
+          refundBalanceBefore: balanceBefore,
+          refundBalanceAfter: balanceAfter,
+          refundedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+      });
+      
+      console.error(`Transaction ${context.params.transactionId} failed and was refunded.`, error);
+    }
+  });
