@@ -6,7 +6,7 @@ import { WalletService, TransactionRecord } from "./WalletService";
 interface WalletContextType {
   user: { uid: string } | null;
   balance: number; // Current mode's balance
-  balances: { testnet: number; live: number; dart: number };
+  balances: { testnet: number; testnetBreakdown: { daily: number; earned: number }; live: number; dart: number };
   mode: "testnet" | "live";
   setMode: (mode: "testnet" | "live") => void;
   address: string;
@@ -27,7 +27,7 @@ export const useWallet = () => {
 
 export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<{ uid: string } | null>(null);
-  const [balances, setBalances] = useState({ testnet: 0, live: 0, dart: 0 });
+  const [balances, setBalances] = useState({ testnet: 0, testnetBreakdown: { daily: 0, earned: 0 }, live: 0, dart: 0 });
   const [mode, setMode] = useState<"testnet" | "live">("testnet");
   const [address, setAddress] = useState("");
   const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
@@ -116,8 +116,20 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         unsubWallet = onSnapshot(q, (snapshot) => {
           if (!snapshot.empty) {
             const data = snapshot.docs[0].data();
+            let testnetBalance = 0;
+            let testnetDaily = 0;
+            let testnetEarned = 0;
+            if (data.testnet) {
+              testnetDaily = data.testnet.dailyAllocation || 0;
+              testnetEarned = data.testnet.earnedBalance || 0;
+              testnetBalance = testnetDaily + testnetEarned;
+            } else {
+              testnetBalance = data.testnetBalance || 0;
+              testnetDaily = testnetBalance;
+            }
             setBalances({
-              testnet: data.testnetBalance || 0,
+              testnet: testnetBalance,
+              testnetBreakdown: { daily: testnetDaily, earned: testnetEarned },
               live: data.liveBalance || 0,
               dart: data.dartBalance || 0
             });

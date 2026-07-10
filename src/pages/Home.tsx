@@ -61,6 +61,19 @@ export default function Home() {
             {mode === "testnet" ? "GOLD" : "NGN"}
           </span>
         </div>
+        
+        {mode === "testnet" && (
+          <div className="flex items-center space-x-4 mt-4 text-xs font-medium border border-zinc-800/50 bg-zinc-900/30 rounded-xl p-3 w-full max-w-sm">
+            <div className="flex flex-col items-center flex-1 border-r border-zinc-800/50">
+              <span className="text-zinc-500 mb-1 flex items-center gap-1">Daily (Resets 24h)</span>
+              <span className="text-amber-400">{balances.testnetBreakdown?.daily?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || "0.00"}</span>
+            </div>
+            <div className="flex flex-col items-center flex-1">
+              <span className="text-zinc-500 mb-1 flex items-center gap-1">Permanent Earned</span>
+              <span className="text-emerald-400">{balances.testnetBreakdown?.earned?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || "0.00"}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-3 gap-4">

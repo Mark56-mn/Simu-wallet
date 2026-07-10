@@ -59,26 +59,35 @@ export class WalletService {
   /**
    * Gets all balances for a user.
    */
-  static async getAllBalances(userId: string): Promise<{ testnet: number, live: number, dart: number }> {
+  static async getAllBalances(userId: string): Promise<{ testnet: number, testnetBreakdown: { daily: number, earned: number }, live: number, dart: number }> {
     const userRef = doc(db, "users", userId);
     const userDoc = await getDoc(userRef);
     
     if (userDoc.exists()) {
       const data = userDoc.data();
       let testnetBalance = 0;
+      let testnetDaily = 0;
+      let testnetEarned = 0;
       if (data.testnet) {
-        testnetBalance = (data.testnet.dailyAllocation || 0) + (data.testnet.earnedBalance || 0);
+        testnetDaily = data.testnet.dailyAllocation || 0;
+        testnetEarned = data.testnet.earnedBalance || 0;
+        testnetBalance = testnetDaily + testnetEarned;
       } else {
         // Fallback for old schema
         testnetBalance = data.testnetBalance || 0;
+        testnetDaily = testnetBalance;
       }
       return {
         testnet: testnetBalance,
+        testnetBreakdown: {
+          daily: testnetDaily,
+          earned: testnetEarned
+        },
         live: data.liveBalance || 0,
         dart: data.dartBalance || 0
       };
     }
-    return { testnet: 0, live: 0, dart: 0 };
+    return { testnet: 0, testnetBreakdown: { daily: 0, earned: 0 }, live: 0, dart: 0 };
   }
 
   /**
