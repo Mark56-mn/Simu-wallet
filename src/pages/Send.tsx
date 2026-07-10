@@ -69,13 +69,21 @@ export default function Send() {
       <div className="space-y-6 flex-1">
         <div>
           <label className="block text-sm font-medium text-zinc-400 mb-2">Recipient ID</label>
-          <input
-            type="text"
-            value={recipient}
-            onChange={(e) => setRecipient(e.target.value)}
-            placeholder="User ID..."
-            className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-indigo-500 transition-colors"
-          />
+          <div className="relative">
+            <input
+              type="text"
+              value={recipient}
+              onChange={(e) => setRecipient(e.target.value)}
+              placeholder="User ID..."
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-xl pl-4 pr-12 py-3 text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-indigo-500 transition-colors"
+            />
+            <button
+              onClick={() => navigate("/scan")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-indigo-400 p-1"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><rect width="5" height="5" x="7" y="7" rx="1"/><rect width="5" height="5" x="12" y="7" rx="1"/><rect width="5" height="5" x="7" y="12" rx="1"/><rect width="5" height="5" x="12" y="12" rx="1"/></svg>
+            </button>
+          </div>
         </div>
 
         <div>

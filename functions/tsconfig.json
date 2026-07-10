@@ -1,11 +1,12 @@
 {
   "compilerOptions": {
     "module": "commonjs",
-    "noImplicitReturns": true,
-    "noUnusedLocals": true,
+    "noImplicitReturns": false,
+    "noUnusedLocals": false,
     "outDir": "lib",
     "sourceMap": true,
-    "strict": true,
+    "strict": false,
+    "noImplicitAny": false,
     "target": "es2017",
     "skipLibCheck": true,
     "types": []

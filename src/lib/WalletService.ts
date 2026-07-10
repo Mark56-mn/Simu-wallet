@@ -1,5 +1,5 @@
-import { db } from "./firebase";
-import { doc, getDoc, setDoc, updateDoc, runTransaction, serverTimestamp, collection, query, where, getDocs, increment } from "firebase/firestore";
+import { db, auth } from "./firebase";
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp, collection, query, where, getDocs, increment } from "firebase/firestore";
 
 export interface TransactionRecord {
   id: string;
@@ -34,6 +34,31 @@ export class WalletService {
         dartBalance: 0,
         createdAt: serverTimestamp()
       });
+    } else {
+      const data = userDoc.data();
+      if (!data.testnet) {
+        await updateDoc(userRef, {
+          testnet: {
+            dailyAllocation: 10000,
+            earnedBalance: data.testnetBalance || 0,
+            lastResetAt: serverTimestamp()
+          }
+        });
+      } else {
+        // Daily reset logic for client side if needed
+        const lastReset = data.testnet.lastResetAt ? data.testnet.lastResetAt.toDate() : new Date(0);
+        if (lastReset) {
+          const now = new Date();
+          const msDiff = now.getTime() - lastReset.getTime();
+          const daysDiff = msDiff / (1000 * 3600 * 24);
+          if (daysDiff >= 1) {
+            await updateDoc(userRef, {
+              "testnet.dailyAllocation": 10000,
+              "testnet.lastResetAt": serverTimestamp()
+            });
+          }
+        }
+      }
     }
   }
 
@@ -101,7 +126,7 @@ export class WalletService {
   }
 
   /**
-   * Sends money between two users using atomic transactions.
+   * Sends money between two users using a secure backend API.
    */
   static async sendMoney(
     senderId: string, 
@@ -109,111 +134,41 @@ export class WalletService {
     amount: number, 
     mode: "testnet" | "live"
   ): Promise<TransactionRecord> {
-    if (senderId === receiverId) {
-      throw new Error("Cannot send to yourself");
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      throw new Error("You must be logged in to send money");
     }
 
-    if (amount <= 0) {
-        throw new Error("Amount must be greater than zero");
-    }
-
-    return await runTransaction(db, async (transaction) => {
-      const senderRef = doc(db, "users", senderId);
-      const receiverRef = doc(db, "users", receiverId);
-      
-      const senderDoc = await transaction.get(senderRef);
-      if (!senderDoc.exists()) {
-        throw new Error("Sender not found");
-      }
-
-      const receiverDoc = await transaction.get(receiverRef);
-      if (!receiverDoc.exists()) {
-         throw new Error("Receiver does not exist");
-      }
-      
-      const senderData = senderDoc.data();
-      let senderBalance = 0;
-      
-      if (mode === "testnet") {
-        const testnet = senderData.testnet || { dailyAllocation: 0, earnedBalance: 0 };
-        senderBalance = (testnet.dailyAllocation || 0) + (testnet.earnedBalance || 0);
-      } else {
-        senderBalance = senderData.liveBalance || 0;
-      }
-      
-      if (senderBalance < amount) {
-        throw new Error("Insufficient balance");
-      }
-      
-      let deductedDaily = 0;
-      let deductedEarned = 0;
-      
-      if (mode === "testnet") {
-        const testnet = senderData.testnet || { dailyAllocation: 0, earnedBalance: 0 };
-        let daily = testnet.dailyAllocation || 0;
-        let earned = testnet.earnedBalance || 0;
-        let remaining = amount;
-        
-        if (daily >= remaining) {
-          daily -= remaining;
-          deductedDaily = remaining;
-        } else {
-          deductedDaily = daily;
-          remaining -= daily;
-          daily = 0;
-          earned -= remaining;
-          deductedEarned = remaining;
-        }
-        
-        transaction.update(senderRef, {
-          "testnet.dailyAllocation": daily,
-          "testnet.earnedBalance": earned,
-          dartBalance: increment(1)
-        });
-        
-        transaction.update(receiverRef, {
-          "testnet.earnedBalance": increment(amount)
-        });
-      } else {
-        transaction.update(senderRef, {
-          liveBalance: increment(-amount),
-          dartBalance: increment(1)
-        });
-        
-        transaction.update(receiverRef, {
-          liveBalance: increment(amount)
-        });
-      }
-      
-      // Record transaction
-      const txRef = doc(collection(db, "transactions"));
-      const newTx: TransactionRecord = {
-        id: txRef.id,
-        senderId,
+    const token = await currentUser.getIdToken();
+    
+    const response = await fetch("/api/wallet/send", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      },
+      body: JSON.stringify({
         receiverId,
         amount,
-        type: "send",
-        mode,
-        status: "completed",
-        deductedDaily,
-        deductedEarned,
-        createdAt: Date.now()
-      };
-      
-      transaction.set(txRef, {
-        senderId,
-        receiverId,
-        amount,
-        type: "send",
-        mode,
-        status: "completed",
-        deductedDaily,
-        deductedEarned,
-        createdAt: serverTimestamp()
-      });
-      
-      return newTx;
+        mode
+      })
     });
+
+    if (!response.ok) {
+      let errorMsg = "Transaction failed";
+      try {
+        const errData = await response.json();
+        if (errData.error) {
+          errorMsg = errData.error;
+        }
+      } catch (e) {
+        // Ignore
+      }
+      throw new Error(errorMsg);
+    }
+
+    const data = await response.json();
+    return data;
   }
 
   /**
@@ -234,16 +189,15 @@ export class WalletService {
     const [sentSnap, recvSnap] = await Promise.all([getDocs(sentQuery), getDocs(recvQuery)]);
     
     const sentTxs = sentSnap.docs.map(d => ({ 
-        id: d.id, 
-        ...d.data(), 
-        createdAt: d.data().createdAt?.toMillis() || Date.now() 
-    } as TransactionRecord));
-
+         id: d.id, 
+         ...d.data(), 
+         createdAt: d.data().createdAt?.toMillis() || Date.now() 
+     } as TransactionRecord));
     const recvTxs = recvSnap.docs.map(d => ({ 
-        id: d.id, 
-        ...d.data(), 
-        createdAt: d.data().createdAt?.toMillis() || Date.now() 
-    } as TransactionRecord));
+         id: d.id, 
+         ...d.data(), 
+         createdAt: d.data().createdAt?.toMillis() || Date.now() 
+     } as TransactionRecord));
     
     return [...sentTxs, ...recvTxs].sort((a, b) => b.createdAt - a.createdAt);
   }

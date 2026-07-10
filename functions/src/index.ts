@@ -503,3 +503,55 @@ export const recoverStuckTransactions = functions.pubsub.schedule('every 1 hours
     console.log(`Recovered and refunded stuck transaction: ${doc.id}`);
   }
 });
+
+/**
+ * Cloud Function: initializeUser
+ */
+export const initializeUser = withSimSec({ actionName: 'initializeUser', requireAuth: true }, async (data, context) => {
+  const userId = context.auth!.uid;
+  const { email } = data;
+  const userRef = db.collection('users').doc(userId);
+  const userDoc = await userRef.get();
+  
+  if (!userDoc.exists) {
+    await userRef.set({
+      email: email || `user_${userId.substring(0, 5)}@example.com`,
+      testnet: {
+        dailyAllocation: 10000,
+        earnedBalance: 0,
+        lastResetAt: admin.firestore.FieldValue.serverTimestamp()
+      },
+      liveBalance: 0,
+      dartBalance: 0,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+  } else {
+    const userData = userDoc.data()!;
+    if (!userData.testnet) {
+      await userRef.update({
+        testnet: {
+          dailyAllocation: 10000,
+          earnedBalance: userData.testnetBalance || 0,
+          lastResetAt: admin.firestore.FieldValue.serverTimestamp()
+        }
+      });
+    }
+  }
+  return { success: true };
+});
+
+/**
+ * Cloud Function: rewardDart
+ */
+export const rewardDart = withSimSec({ actionName: 'rewardDart', requireAuth: true }, async (data, context) => {
+  const userId = context.auth!.uid;
+  const { amount } = data;
+  if (typeof amount !== 'number' || amount <= 0) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid amount.');
+  }
+  const userRef = db.collection('users').doc(userId);
+  await userRef.update({
+    dartBalance: admin.firestore.FieldValue.increment(amount)
+  });
+  return { success: true };
+});
