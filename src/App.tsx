@@ -13,6 +13,8 @@ import Receive from "./pages/Receive";
 import History from "./pages/History";
 import Scan from "./pages/Scan";
 import Settings from "./pages/Settings";
+import { InstallPrompt } from "./components/InstallPrompt";
+import { OfflineIndicator } from "./components/OfflineIndicator";
 
 function AppGuard({ children }: { children: React.ReactNode }) {
   const { loading } = useWallet();
@@ -26,6 +28,8 @@ export default function App() {
   return (
     <BrowserRouter>
       <WalletProvider>
+        <InstallPrompt />
+        <OfflineIndicator />
         <Routes>
           <Route path="/" element={<AppGuard><Layout /></AppGuard>}>
             <Route index element={<Home />} />

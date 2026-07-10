@@ -50,8 +50,135 @@ const verifyToken = async (req: express.Request, res: express.Response, next: ex
   }
 };
 
+// --- SANDBOX MIDDLEWARE ---
+const rateLimitMap = new Map<string, { count: number, resetTime: number }>();
+
+const sandboxSecurity = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const uid = (req as any).user?.uid;
+  if (!uid) {
+    res.status(401).json({ error: "Sandbox rejected: Unauthorized access" });
+    return;
+  }
+
+  // 1. Rate Limiting (Max 30 requests per minute per UID)
+  const now = Date.now();
+  const userLimit = rateLimitMap.get(uid);
+  if (userLimit && now < userLimit.resetTime) {
+    if (userLimit.count >= 30) {
+      res.status(429).json({ error: "Sandbox rejected: Too many requests. Please try again later." });
+      return;
+    }
+    userLimit.count++;
+  } else {
+    rateLimitMap.set(uid, { count: 1, resetTime: now + 60000 });
+  }
+
+  // 2. Payload Validation & Sanitization
+  if (req.body) {
+    const strBody = JSON.stringify(req.body);
+    if (strBody.includes('__proto__') || strBody.includes('constructor')) {
+       res.status(400).json({ error: "Sandbox rejected: Malformed or malicious payload" });
+       return;
+    }
+
+    // Amount Validation (if present)
+    if (req.body.amount !== undefined) {
+       const amount = req.body.amount;
+       if (typeof amount !== 'number' || amount <= 0 || !Number.isFinite(amount) || amount > 1000000000) {
+           res.status(400).json({ error: "Sandbox rejected: Invalid transaction amount" });
+           return;
+       }
+    }
+    
+    // Mode Validation (if present)
+    if (req.body.mode !== undefined && !['testnet', 'live'].includes(req.body.mode)) {
+       res.status(400).json({ error: "Sandbox rejected: Invalid network mode" });
+       return;
+    }
+  }
+
+  next();
+};
+
+// Apply security layers to all wallet API routes
+app.use("/api/wallet", verifyToken, sandboxSecurity);
+
 // API Routes
-app.post("/api/wallet/send", verifyToken, async (req, res) => {
+app.post("/api/wallet/init", async (req, res) => {
+  try {
+    const adminApp = getFirebaseAdmin();
+    const db = adminApp.firestore();
+    const uid = (req as any).user.uid;
+    const email = req.body.email || "";
+
+    const userRef = db.collection("users").doc(uid);
+    const userDoc = await userRef.get();
+
+    if (!userDoc.exists) {
+      await userRef.set({
+        email: email || `user_${uid.substring(0, 5)}@example.com`,
+        testnet: {
+          dailyAllocation: 10000,
+          earnedBalance: 0,
+          lastResetAt: admin.firestore.FieldValue.serverTimestamp()
+        },
+        liveBalance: 0,
+        dartBalance: 0,
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    } else {
+      const data = userDoc.data()!;
+      if (!data.testnet) {
+        await userRef.update({
+          testnet: {
+            dailyAllocation: 10000,
+            earnedBalance: data.testnetBalance || 0,
+            lastResetAt: admin.firestore.FieldValue.serverTimestamp()
+          }
+        });
+      } else {
+        const lastReset = data.testnet.lastResetAt ? data.testnet.lastResetAt.toDate() : new Date(0);
+        const now = new Date();
+        const msDiff = now.getTime() - lastReset.getTime();
+        const daysDiff = msDiff / (1000 * 3600 * 24);
+        if (daysDiff >= 1) {
+          await userRef.update({
+            "testnet.dailyAllocation": 10000,
+            "testnet.lastResetAt": admin.firestore.FieldValue.serverTimestamp()
+          });
+        }
+      }
+    }
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/wallet/reward", async (req, res) => {
+  try {
+    const adminApp = getFirebaseAdmin();
+    const db = adminApp.firestore();
+    const uid = (req as any).user.uid;
+    const { amount } = req.body;
+
+    if (!amount || amount <= 0 || amount > 100) {
+        res.status(400).json({ error: "Sandbox rejected: Invalid reward amount" });
+        return;
+    }
+
+    const userRef = db.collection("users").doc(uid);
+    await userRef.update({
+      dartBalance: admin.firestore.FieldValue.increment(amount)
+    });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/wallet/send", async (req, res) => {
   try {
     const adminApp = getFirebaseAdmin();
     const db = adminApp.firestore();

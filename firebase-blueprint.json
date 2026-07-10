@@ -1,0 +1,50 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A wallet user",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "testnet": {
+          "type": "object",
+          "properties": {
+            "dailyAllocation": { "type": "number" },
+            "earnedBalance": { "type": "number" },
+            "lastResetAt": { "type": "timestamp" }
+          }
+        },
+        "liveBalance": { "type": "number" },
+        "dartBalance": { "type": "number" },
+        "createdAt": { "type": "timestamp" }
+      }
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "A record of money sent or received",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "senderId": { "type": "string" },
+        "receiverId": { "type": "string" },
+        "amount": { "type": "number" },
+        "type": { "type": "string" },
+        "mode": { "type": "string" },
+        "status": { "type": "string" },
+        "deductedDaily": { "type": "number" },
+        "deductedEarned": { "type": "number" },
+        "createdAt": { "type": "timestamp" }
+      }
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Stores user balances and data"
+    },
+    "transactions/{transactionId}": {
+      "schema": { "$ref": "#/entities/Transaction" },
+      "description": "Stores transaction history"
+    }
+  }
+}

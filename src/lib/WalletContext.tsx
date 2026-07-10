@@ -1,6 +1,7 @@
-import { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { db } from "./firebase";
+import { createContext, useContext, useEffect, useState } from "react";
+import { db, auth } from "./firebase";
 import { collection, query, onSnapshot, where } from "firebase/firestore";
+import { signInAnonymously, onAuthStateChanged } from "firebase/auth";
 import { WalletService, TransactionRecord } from "./WalletService";
 
 interface WalletContextType {
@@ -13,6 +14,8 @@ interface WalletContextType {
   transactions: TransactionRecord[];
   loading: boolean;
   isOnline: boolean;
+  isSyncing: boolean;
+  pendingQueue: TransactionRecord[];
   logout: () => Promise<void>;
   sendToken: (amount: number, address: string) => Promise<void>;
 }
@@ -36,6 +39,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   
   // Offline queue state
   const [pendingQueue, setPendingQueue] = useState<TransactionRecord[]>([]);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // Monitor online status
   useEffect(() => {
@@ -65,8 +69,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   // Sync queue when online
   useEffect(() => {
-    if (isOnline && pendingQueue.length > 0 && user) {
+    if (isOnline && pendingQueue.length > 0 && user && !isSyncing) {
       const syncQueue = async () => {
+        setIsSyncing(true);
         const remaining = [...pendingQueue];
         for (let i = remaining.length - 1; i >= 0; i--) {
           const tx = remaining[i];
@@ -78,41 +83,37 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
               tx.mode
             );
             remaining.splice(i, 1);
+            // Optional: update UI on each successful sync
+            setPendingQueue([...remaining]);
+            localStorage.setItem("simu_wallet_queue", JSON.stringify(remaining));
           } catch (e: any) {
             console.error("Failed to sync tx", tx.id, e instanceof Error ? e.message : String(e));
           }
         }
         setPendingQueue(remaining);
         localStorage.setItem("simu_wallet_queue", JSON.stringify(remaining));
+        setIsSyncing(false);
       };
       syncQueue();
     }
-  }, [isOnline, pendingQueue, user]);
+  }, [isOnline, pendingQueue.length, user]);
 
   useEffect(() => {
-    // Generate or get existing random local user id
-    let localUid = localStorage.getItem("simu_wallet_local_uid");
-    if (!localUid) {
-      localUid = "user_" + Math.random().toString(36).substring(2, 10);
-      localStorage.setItem("simu_wallet_local_uid", localUid);
-    }
-    
-    const u = { uid: localUid };
-    setUser(u);
-    setAddress(u.uid);
-
     let unsubWallet = () => {};
     let unsubSent = () => {};
     let unsubRecv = () => {};
 
-    const initData = async () => {
-      try {
-        // Ensure user is registered
-        await WalletService.initializeUser(u.uid);
+    const unsubAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        const u = { uid: firebaseUser.uid };
+        setUser(u);
+        setAddress(u.uid);
 
-        // Listen for balance updates
-        const userRef = collection(db, "users");
-        const q = query(userRef, where("__name__", "==", u.uid));
+        try {
+          await WalletService.initializeUser(u.uid);
+
+          const userRef = collection(db, "users");
+          const q = query(userRef, where("__name__", "==", u.uid));
         unsubWallet = onSnapshot(q, (snapshot) => {
           if (!snapshot.empty) {
             const data = snapshot.docs[0].data();
@@ -169,14 +170,20 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         console.error("Failed to init data:", err instanceof Error ? err.message : String(err));
         setLoading(false);
       }
-    };
-
-    initData();
+      } else {
+        // Sign in anonymously if not logged in
+        signInAnonymously(auth).catch(err => {
+          console.error("Failed to sign in anonymously:", err);
+          setLoading(false);
+        });
+      }
+    });
 
     return () => {
       unsubWallet();
       unsubSent();
       unsubRecv();
+      unsubAuth();
     };
   }, []);
 
@@ -225,10 +232,13 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = async () => {
-    // Generate a new id to simulate logout/login
-    const newUid = "user_" + Math.random().toString(36).substring(2, 10);
-    localStorage.setItem("simu_wallet_local_uid", newUid);
-    window.location.reload();
+    try {
+      const { signOut } = await import("firebase/auth");
+      await signOut(auth);
+      window.location.reload();
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   // Combine synced txs with pending txs for display
@@ -252,6 +262,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       transactions: displayTransactions, 
       loading, 
       isOnline,
+      isSyncing,
+      pendingQueue,
       logout,
       sendToken 
     }}>

@@ -1,5 +1,5 @@
 import { db, auth } from "./firebase";
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp, collection, query, where, getDocs, increment } from "firebase/firestore";
+import { doc, getDoc, collection, query, where, getDocs } from "firebase/firestore";
 
 export interface TransactionRecord {
   id: string;
@@ -19,46 +19,21 @@ export class WalletService {
    * Initializes a user with default balances if they don't exist.
    */
   static async initializeUser(userId: string, email: string = "") {
-    const userRef = doc(db, "users", userId);
-    const userDoc = await getDoc(userRef);
+    const currentUser = auth.currentUser;
+    if (!currentUser) return;
+    const token = await currentUser.getIdToken();
     
-    if (!userDoc.exists()) {
-      await setDoc(userRef, {
-        email: email || `user_${userId.substring(0, 5)}@example.com`,
-        testnet: {
-          dailyAllocation: 10000,
-          earnedBalance: 0,
-          lastResetAt: serverTimestamp()
+    try {
+      await fetch("/api/wallet/init", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
         },
-        liveBalance: 0,
-        dartBalance: 0,
-        createdAt: serverTimestamp()
+        body: JSON.stringify({ email })
       });
-    } else {
-      const data = userDoc.data();
-      if (!data.testnet) {
-        await updateDoc(userRef, {
-          testnet: {
-            dailyAllocation: 10000,
-            earnedBalance: data.testnetBalance || 0,
-            lastResetAt: serverTimestamp()
-          }
-        });
-      } else {
-        // Daily reset logic for client side if needed
-        const lastReset = data.testnet.lastResetAt ? data.testnet.lastResetAt.toDate() : new Date(0);
-        if (lastReset) {
-          const now = new Date();
-          const msDiff = now.getTime() - lastReset.getTime();
-          const daysDiff = msDiff / (1000 * 3600 * 24);
-          if (daysDiff >= 1) {
-            await updateDoc(userRef, {
-              "testnet.dailyAllocation": 10000,
-              "testnet.lastResetAt": serverTimestamp()
-            });
-          }
-        }
-      }
+    } catch (e) {
+      console.error("Failed to initialize user via secure sandbox", e);
     }
   }
 
@@ -119,10 +94,22 @@ export class WalletService {
    * Rewards Dart tokens to a user.
    */
   static async rewardDart(userId: string, amount: number): Promise<void> {
-    const userRef = doc(db, "users", userId);
-    await updateDoc(userRef, {
-      dartBalance: increment(amount)
-    });
+    const currentUser = auth.currentUser;
+    if (!currentUser) return;
+    const token = await currentUser.getIdToken();
+    
+    try {
+      await fetch("/api/wallet/reward", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ amount })
+      });
+    } catch (e) {
+      console.error("Failed to reward dart via secure sandbox", e);
+    }
   }
 
   /**

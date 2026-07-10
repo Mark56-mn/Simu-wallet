@@ -1,22 +1,51 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
+    // ---------------------------------------------------------
+    // SECURITY PRINCIPLES FOR FINTECH APP:
+    // 1. Client SDK has NO WRITE ACCESS. All mutations (deposits,
+    //    transfers, rewards) MUST go through the secure backend API 
+    //    (server.ts) which uses the Admin SDK and sandbox verification.
+    // 2. Users can only READ their own sensitive data.
+    // ---------------------------------------------------------
     
-    // Users collection: Users can read their own profile, but CANNOT write (backend only)
-    match /users/{userId} {
-      allow read: if request.auth != null && request.auth.uid == userId;
-      allow write: if false; 
-    }
-    
-    // Transactions collection: Users can read if they are sender or receiver, NO writes
-    match /transactions/{transactionId} {
-      allow read: if request.auth != null && (resource.data.senderId == request.auth.uid || resource.data.receiverId == request.auth.uid);
-      allow write: if false; 
-    }
-    
-    // Fallback: Deny all by default
+    // Global default deny
     match /{document=**} {
       allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      // Users can only read their own profile
+      allow get, list: if isOwner(userId);
+      
+      // ABSOLUTELY NO WRITES FROM CLIENT. 
+      // Account creation and balance updates happen via backend.
+      allow write: if false; 
+    }
+
+    // Transactions Collection
+    match /transactions/{transactionId} {
+      // Users can only read transactions where they are the sender or receiver.
+      // We enforce this on the resource data. The client must supply matching `where()` clauses.
+      allow read: if isSignedIn() && (
+        resource.data.senderId == request.auth.uid || 
+        resource.data.receiverId == request.auth.uid
+      );
+      
+      // ABSOLUTELY NO WRITES FROM CLIENT.
+      // Transfers are validated and executed by the backend.
+      allow write: if false;
     }
   }
 }
